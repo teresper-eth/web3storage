@@ -25,6 +25,56 @@ interface FileMetadata {
   pins: PinStatus[];
 }
 
+/**
+ * Utility functions for file handling
+ */
+export const utils = {
+  /**
+   * Converts a file size in bytes to a human-readable format
+   */
+  formatFileSize(bytes: number): string {
+    const sizes = ["Bytes", "KB", "MB", "GB", "TB"];
+    if (bytes === 0) return "0 Bytes";
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return `${parseFloat((bytes / Math.pow(1024, i)).toFixed(2))} ${sizes[i]}`;
+  },
+
+  /**
+   * Validates a CID string
+   */
+  isValidCID(cid: string): boolean {
+    // Basic CID validation - can be enhanced based on specific requirements
+    const cidRegex = /^[a-zA-Z0-9]{46,59}$/;
+    return cidRegex.test(cid);
+  },
+
+  /**
+   * Creates a retry wrapper for API calls
+   */
+  async withRetry<T>(
+    fn: () => Promise<T>,
+    maxRetries: number = 3,
+    delay: number = 1000
+  ): Promise<T> {
+    let lastError: Error | null = null;
+
+    for (let i = 0; i < maxRetries; i++) {
+      try {
+        return await fn();
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        if (i < maxRetries - 1) {
+          await new Promise((resolve) =>
+            setTimeout(resolve, delay * Math.pow(2, i))
+          );
+        }
+      }
+    }
+
+    throw lastError;
+  },
+};
+
 export class Web3Storage {
   private readonly BASE_URL = "https://api.web3.storage/{}";
 
@@ -264,6 +314,62 @@ export class Web3Storage {
           error instanceof Error ? error.message : "Unknown error"
         }`
       );
+    }
+  }
+
+  /**
+   * Get file download URL
+   */
+  getFileUrl(cid: string): string {
+    if (!utils.isValidCID(cid)) {
+      throw new Error("Invalid CID format");
+    }
+    return `https://${cid}.ipfs.w3s.link`;
+  }
+
+  /**
+   * Upload a file with retry mechanism
+   */
+  async uploadWithRetry(
+    filePath: string,
+    token: string,
+    maxRetries: number = 3
+  ): Promise<UploadResponse> {
+    return utils.withRetry(() => this.upload(filePath, token), maxRetries);
+  }
+
+  /**
+   * Get file size from CID
+   */
+  async getFileSize(cid: string): Promise<string> {
+    try {
+      const url = this.getFileUrl(cid);
+      const response = await axios.head(url);
+      const contentLength = response.headers["content-length"];
+      const size = parseInt(contentLength, 10) || 0;
+      return utils.formatFileSize(size);
+    } catch (error) {
+      throw new Error(
+        `Failed to get file size: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`
+      );
+    }
+  }
+
+  /**
+   * Check if token is valid
+   */
+  async isValidToken(token: string): Promise<boolean> {
+    try {
+      const headers = {
+        Authorization: `Bearer ${token}`,
+      };
+      const endpoint = this.BASE_URL.replace("{}", "user/uploads");
+      const response = await axios.head(endpoint, { headers });
+      return response.status === 200;
+    } catch {
+      return false;
     }
   }
 }
